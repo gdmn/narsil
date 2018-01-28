@@ -20,7 +20,7 @@
 //#define USING_220K	// for using the 220K resistor
 //#define USING_360K	// for using a 360K resistor (LDO and 2S cells)
 
-#define D1_DIODE 2				// Drop over rev. polarity protection diode: 0.2V normally, 0.3V for Q8
+#define D1_DIODE 3				// Drop over rev. polarity protection diode: 0.2V normally, 0.3V for Q8
 
 // For 2 channel (FET+1) boards:
  //#define USING_3807135_BANK	// (default OFF) sets up ramping for 380 mA 7135's instead of a FET
@@ -29,7 +29,7 @@
 //#define TRIPLE_3_7135			// Configure for 3 7135's
 #define TRIPLE_8_7135			// Configure for 8 7135's
 
-#define ONBOARD_LED				// Enable the LED support
+//#define ONBOARD_LED				// Enable the LED support
 //----------------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------------
 
@@ -38,7 +38,7 @@
 //			Temperature Monitoring
 //----------------------------------------------------------------------------------------
 // Temperature Calibration Offset -
-#define TEMP_CAL_OFFSET (-8)
+#define TEMP_CAL_OFFSET (4)
 //   -19  For the OTR M3 (15 mm TA triple), -22 might be closer/better
 //   -6   BLF Q8 Round 3 - blinks 29C w/3 setting for 20C (68F) room temp
 //   -2   try for the Manker U21 (LJ)
@@ -148,7 +148,7 @@
 #define BEACON_10S_MODE	  SPECIAL_MODES+5
 
 // Custom define your blinky mode set here:
-#define SPECIAL_MODES_SET	STROBE_MODE, POLICE_STROBE, BIKING_STROBE, BEACON_2S_MODE, BEACON_10S_MODE
+#define SPECIAL_MODES_SET	BIKING_STROBE, STROBE_MODE, POLICE_STROBE, BEACON_2S_MODE, BEACON_10S_MODE
 //----------------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------------
 

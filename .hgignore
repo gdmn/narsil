@@ -1,0 +1,7 @@
+syntax: glob
+
+*.elf
+*.bak
+*.lss
+*.o
+*.srec

@@ -68,8 +68,8 @@
 //-----------------------------------------------------------------------------
 //#include "setups_2C2S.h"
 //#include "setups_GTBuck.h"
-#include "setups_Q8_2C1S.h"
-//#include "setups_3C1S.h"
+//#include "setups_Q8_2C1S.h"
+#include "Setups_3C1S.h"
 //#include "setups_3C2S.h"
 
 #if OUT_CHANNELS == 3
@@ -255,7 +255,409 @@ PROGMEM const uint8_t voltage_blinks[] = {
 
 
 // channel specific versions 
-#include "Channels.h"
+//#include "Channels.h"
+/****************************************************************************************
+ * channels.h - output channel support with ramping tables
+ * ==========
+ *
+ *    ATtiny85 Diagrams
+ *    -----------------
+ *
+ * For TA style triples, 3 channel:
+ *              ---
+ *   Reset  1 -|   |- 8  VCC
+ *  switch  2 -|   |- 7  Voltage ADC or Indicator LED
+ * FET PWM  3 -|   |- 6  bank of 7135s PWM
+ *     GND  4 -|   |- 5  one 7135 PWM
+ *              ---
+ *
+ * For standard FET+1, 2 channels:
+ *              ---
+ *   Reset  1 -|   |- 8  VCC
+ *  switch  2 -|   |- 7  Voltage ADC
+ * Ind.LED  3 -|   |- 6  FET PWM
+ *     GND  4 -|   |- 5  7135 PWM
+ *              ---
+ *
+ * For 1 channel, using a NANJG or FET+1:
+ *              ---
+ *   Reset  1 -|   |- 8  VCC
+ *  switch  2 -|   |- 7  Voltage ADC
+ * Ind.LED  3 -|   |- 6  FET or 7135s PWM
+ *     GND  4 -|   |- 5  Not Used (7135 PWM)
+ *              ---
+ *
+ *
+ ****************************************************************************************/
+#ifndef CHANNELS_H_
+#define CHANNELS_H_
+
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+#if   OUT_CHANNELS == 2			// FET+1 or Buck driver
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+
+#ifdef ONBOARD_LED
+/**************************************************************************************
+* TurnOnBoardLed
+* ==============
+**************************************************************************************/
+void TurnOnBoardLed(byte on)
+{
+	if (onboardLedEnable)
+	{
+		if (on)
+		{
+			DDRB = (1 << ONE7135_PWM_PIN) | (1 << FET_PWM_PIN) | (1 << ONBOARD_LED_PIN);
+			PORTB |= (1 << ONBOARD_LED_PIN);
+		}
+		else
+		{
+			DDRB = (1 << ONE7135_PWM_PIN) | (1 << FET_PWM_PIN);
+			PORTB &= 0xff ^ (1 << ONBOARD_LED_PIN);
+		}
+	}
+}
+#endif
+
+/**************************************************************************************
+* DefineModeSet
+* =============
+**************************************************************************************/
+void DefineModeSet()
+{
+	byte offset = 1;
+
+	modesCnt = pgm_read_byte(modeSetCnts+modeSetIdx);
+
+	// Set OFF mode states (index 0)
+	by7135Modes[0] = byFETModes[0] = 0;
+
+	if (moonLightEnable)
+	{
+		offset = 2;
+		by7135Modes[1] = moonlightLevel;	// PWM value to use for moonlight mode
+	  #ifdef GT_BUCK
+		byFETModes[1] = 25;					// for GT-buck, set analog dimming to 10%
+	  #else
+		byFETModes[1] = 0;
+	  #endif
+	}
+
+	// Populate the RAM based current mode set
+	int i;									// winAVR does not like this inside the for loop (weird!!)
+	for (i = 0; i < modesCnt; i++)
+	{
+		by7135Modes[offset+i] = pgm_read_byte(modeTable7135[modeSetIdx]+i);
+		byFETModes[offset+i] = pgm_read_byte(modeTableFet[modeSetIdx]+i);
+	}
+
+	modesCnt += offset;		// adjust to total mode count
+}
+
+/**************************************************************************************
+* SetOutput - sets the PWM output values directly for the two channels
+* =========
+**************************************************************************************/
+extern inline void SetOutput(byte pwm7135, byte pwmFet)
+{
+	ONE7135_PWM_LVL = pwm7135;
+	FET_PWM_LVL = pwmFet;
+}
+
+/**************************************************************************************
+* SetLevel - uses the ramping levels to set the PWM output
+* ========		(0 is OFF, 1..TURBO_LEVEL is the ramping index level)
+**************************************************************************************/
+void SetLevel(byte level)
+{
+	if (level == 0)
+	{
+		SetOutput(OFF_OUTPUT);
+		
+	  #ifdef ONBOARD_LED
+		if (locatorLed)
+			TurnOnBoardLed(1);
+	  #endif
+	}
+	else
+	{
+	  #ifdef TURBO_LEVEL_SUPPORT
+		if (level == TURBO_LEVEL)
+		{
+		  #ifdef GT_BUCK
+			SetOutput(255, 255);
+		  #else
+			SetOutput(0, 255);
+		  #endif
+		}
+		else
+		{
+			level -= 1;	// make it 0 based
+			SetOutput(pgm_read_byte(ramp_7135 + level), pgm_read_byte(ramp_FET  + level));
+		}
+	  #else
+		level -= 1;	// make it 0 based
+		SetOutput(pgm_read_byte(ramp_7135 + level), pgm_read_byte(ramp_FET  + level));
+	  #endif
+		
+	  #ifdef ONBOARD_LED
+		if (locatorLed)
+			TurnOnBoardLed(0);
+	  #endif
+	}
+}
+
+/**************************************************************************************
+* SetMode
+* =======
+**************************************************************************************/
+extern inline void SetMode(byte mode)
+{
+	currOutLvl1 = by7135Modes[mode];
+	currOutLvl2 = byFETModes[mode];
+	
+	SetOutput(currOutLvl1, currOutLvl2);
+
+  #ifdef ONBOARD_LED
+	if ((mode == 0) && locatorLed)
+		TurnOnBoardLed(1);
+	else if (last_modeIdx == 0)
+		TurnOnBoardLed(0);
+  #endif
+}
+
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+#elif OUT_CHANNELS == 3		// Triple Channel
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+
+#ifdef ONBOARD_LED
+/**************************************************************************************
+* TurnOnBoardLed
+* ==============
+**************************************************************************************/
+void TurnOnBoardLed(byte on)
+{
+	if (onboardLedEnable)
+	{
+		if (on)
+		{
+			DDRB = (1 << ONE7135_PWM_PIN) | (1 << BANK_PWM_PIN) | (1 << FET_PWM_PIN) | (1 << ONBOARD_LED_PIN);
+			
+			PORTB |= (1 << ONBOARD_LED_PIN);
+		}
+		else
+		{
+			DDRB = (1 << ONE7135_PWM_PIN) | (1 << BANK_PWM_PIN) | (1 << FET_PWM_PIN);
+			PORTB &= 0xff ^ (1 << ONBOARD_LED_PIN);
+		}
+	}
+}
+#endif
+
+/**************************************************************************************
+* DefineModeSet
+* =============
+**************************************************************************************/
+void DefineModeSet()
+{
+	byte offset = 1;
+
+	modesCnt = pgm_read_byte(modeSetCnts+modeSetIdx);
+
+	// Set OFF mode states (index 0)
+	by7135Modes[0] = by7135sModes[0] = byFETModes[0] = 0;
+
+	if (moonLightEnable)
+	{
+		offset = 2;
+		by7135Modes[1] = moonlightLevel;	// PWM value to use for moonlight mode
+		by7135sModes[1] = byFETModes[1] = 0;
+	}
+
+	// Populate the RAM based current mode set
+	for (int i = 0; i < modesCnt; i++)
+	{
+		by7135Modes[offset+i] = pgm_read_byte(modeTable7135[modeSetIdx]+i);
+		by7135sModes[offset+i] = pgm_read_byte(modeTable7135s[modeSetIdx]+i);
+		byFETModes[offset+i] = pgm_read_byte(modeTableFet[modeSetIdx]+i);
+	}
+
+	modesCnt += offset;		// adjust to total mode count
+}
+
+/**************************************************************************************
+* SetOutput - sets the PWM output value directly
+* =========
+**************************************************************************************/
+inline void SetOutput(byte pwm7135, byte pwm7135s, byte pwmFet)
+{
+	ONE7135_PWM_LVL = pwm7135;
+	BANK_PWM_LVL = pwm7135s;
+	FET_PWM_LVL = pwmFet;
+}
+
+/**************************************************************************************
+* SetLevel - uses the ramping levels to set the PWM output
+* ========		(0 is OFF, 1..RAMP_SIZE is the ramping index level)
+**************************************************************************************/
+void SetLevel(byte level)
+{
+	if (level == 0)
+	{
+		SetOutput(0,0,0);
+	  #ifdef ONBOARD_LED
+		if (locatorLed)
+			TurnOnBoardLed(1);
+	  #endif
+	}
+	else
+	{
+		level -= 1;	// make it 0 based
+		SetOutput(pgm_read_byte(ramp_7135 + level), pgm_read_byte(ramp_7135s + level), pgm_read_byte(ramp_FET  + level));
+	  #ifdef ONBOARD_LED
+		if (locatorLed)
+			TurnOnBoardLed(0);
+	  #endif
+	}
+}
+
+/**************************************************************************************
+* SetMode
+* =======
+**************************************************************************************/
+extern inline void SetMode(byte mode)
+{
+	currOutLvl1 = by7135Modes[mode];
+	currOutLvl2 = by7135sModes[mode];
+	currOutLvl3 = byFETModes[mode];
+	
+	SetOutput(currOutLvl1, currOutLvl2, currOutLvl3);
+  #ifdef ONBOARD_LED
+	if ((mode == 0) && locatorLed)
+		TurnOnBoardLed(1);
+	else if (last_modeIdx == 0)
+		TurnOnBoardLed(0);
+  #endif
+}
+
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+#elif OUT_CHANNELS == 1		// single FET or single bank of 7135's
+//---------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------
+
+#ifdef ONBOARD_LED
+/**************************************************************************************
+* TurnOnBoardLed
+* ==============
+**************************************************************************************/
+void TurnOnBoardLed(byte on)
+{
+	if (onboardLedEnable)
+	{
+		if (on)
+		{
+			DDRB = (1 << MAIN_PWM_PIN) | (1 << ONBOARD_LED_PIN);
+			PORTB |= (1 << ONBOARD_LED_PIN);
+		}
+		else
+		{
+			DDRB = (1 << MAIN_PWM_PIN);
+			PORTB &= 0xff ^ (1 << ONBOARD_LED_PIN);
+		}
+	}
+}
+#endif
+
+/**************************************************************************************
+* DefineModeSet
+* =============
+**************************************************************************************/
+void DefineModeSet()
+{
+	byte offset = 1;
+
+	modesCnt = pgm_read_byte(modeSetCnts+modeSetIdx);
+
+	// Set OFF mode states (index 0)
+	byMainModes[0] = 0;
+
+	if (moonLightEnable)
+	{
+		offset = 2;
+		byMainModes[1] = moonlightLevel;	// PWM value to use for moonlight mode
+	}
+
+	// Populate the RAM based current mode set
+	for (int i = 0; i < modesCnt; i++)
+	{
+		byMainModes[offset+i] = pgm_read_byte(modeTable1Chan[modeSetIdx]+i);
+	}
+
+	modesCnt += offset;		// adjust to total mode count
+}
+
+/**************************************************************************************
+* SetOutput - sets the PWM output values directly for the one channel
+* =========
+**************************************************************************************/
+inline void SetOutput(byte pwmChan)
+{
+	MAIN_PWM_LVL = pwmChan;
+}
+
+/**************************************************************************************
+* SetLevel - uses the ramping levels to set the PWM output
+* ========		(0 is OFF, 1..RAMP_SIZE is the ramping index level)
+**************************************************************************************/
+void SetLevel(byte level)
+{
+	if (level == 0)
+	{
+		SetOutput(OFF_OUTPUT);
+		
+		#ifdef ONBOARD_LED
+		if (locatorLed)
+		TurnOnBoardLed(1);
+		#endif
+	}
+	else
+	{
+		level -= 1;	// make it 0 based
+		SetOutput(pgm_read_byte(ramp_1Chan + level));
+		
+		#ifdef ONBOARD_LED
+		if (locatorLed)
+		TurnOnBoardLed(0);
+		#endif
+	}
+}
+
+/**************************************************************************************
+* SetMode
+* =======
+**************************************************************************************/
+void inline SetMode(byte mode)
+{
+	currOutLvl = byMainModes[mode];
+	
+	SetOutput(currOutLvl);
+
+	#ifdef ONBOARD_LED
+	if ((mode == 0) && locatorLed)
+	TurnOnBoardLed(1);
+	else if (last_modeIdx == 0)
+	TurnOnBoardLed(0);
+	#endif
+}
+
+#endif
+
+#endif /* CHANNELS_H_ */
 
 
 /**************************************************************************************
@@ -279,7 +681,6 @@ void SetConfigDefaults()
 	bvldLedOnly = DEF_BVLD_LED_ONLY;		// BVLD (Battery Voltage Level Display) - 1=BVLD shown only w/onboard LED, 0=both primary and onboard LED's
 	onboardLedEnable = DEF_ONBOARD_LED;	// On Board LED support - 1=enabled, 0=disabled
 }
-
 
 /**************************************************************************************
 * Strobe
@@ -622,7 +1023,7 @@ void PrevMode()
 * PCINT_on - Enable pin change interrupts
 * ========
 **************************************************************************************/
-inline void PCINT_on()
+extern inline void PCINT_on()
 {
 	// Enable pin change interrupts
 	GIMSK |= (1 << PCIE);
@@ -632,7 +1033,7 @@ inline void PCINT_on()
 * PCINT_off - Disable pin change interrupts
 * =========
 **************************************************************************************/
-inline void PCINT_off()
+extern inline void PCINT_off()
 {
 	// Disable pin change interrupts
 	GIMSK &= ~(1 << PCIE);
@@ -646,7 +1047,7 @@ EMPTY_INTERRUPT(PCINT0_vect);
 * WDT_on - Setup watchdog timer to only interrupt, not reset, every 16ms
 * ======
 **************************************************************************************/
-inline void WDT_on()
+extern inline void WDT_on()
 {
 	// Setup watchdog timer to only interrupt, not reset, every 16ms.
 	cli();							// Disable interrupts
@@ -660,7 +1061,7 @@ inline void WDT_on()
 * WDT_off - turn off the WatchDog timer
 * =======
 **************************************************************************************/
-inline void WDT_off()
+extern inline void WDT_off()
 {
 	cli();							// Disable interrupts
 	wdt_reset();					// Reset the WDT
@@ -674,7 +1075,7 @@ inline void WDT_off()
 * ADC_on - Turn the AtoD Converter ON
 * ======
 **************************************************************************************/
-inline void ADC_on()
+extern inline void ADC_on()
 {
 	// Turn ADC on (13 CLKs required for conversion, go max 200 kHz for 10-bit resolution)
   #ifdef VOLT_MON_R1R2
@@ -690,7 +1091,7 @@ inline void ADC_on()
 * ADC_off - Turn the AtoD Converter OFF
 * =======
 **************************************************************************************/
-inline void ADC_off()
+extern inline void ADC_off()
 {
 	ADCSRA &= ~(1<<ADEN); //ADC off
 }
@@ -699,7 +1100,7 @@ inline void ADC_off()
 * SleepUntilSwitchPress - only called with the light OFF
 * =====================
 **************************************************************************************/
-inline void SleepUntilSwitchPress()
+extern inline void SleepUntilSwitchPress()
 {
 	// This routine takes up a lot of program memory :(
 	
@@ -763,7 +1164,7 @@ inline void SleepUntilSwitchPress()
 *   bit  5-6: blinky mode config: 1=strobe only, 2=all blinkies, 0=disable
 *
 **************************************************************************************/
-inline void LoadConfig()
+extern inline void LoadConfig()
 {
 	byte byMarker;
 
@@ -1022,10 +1423,31 @@ ISR(WDT_vect)
 			{
 				if ((wPressDuration == 1) && !byLockOutSet)
 				{
-					outLevel = rampingLevel = TURBO_LEVEL;
+					// dmn  outLevel = rampingLevel = TURBO_LEVEL;
+                    outLevel = rampingLevel = 118;
 					SetLevel(outLevel);
 				}
-			}
+			} 
+            
+            else if (byLockOutSet)
+            // dmn
+            {
+				if (wPressDuration == 1)
+				{
+                    outLevel = rampingLevel = 255;
+						 #if OUT_CHANNELS == 3		// Triple Channel
+							SetOutput(moonlightLevel,0,0);
+						 #elif OUT_CHANNELS == 2	// two channels
+						  #ifdef GT_BUCK
+							SetOutput(moonlightLevel,25);    // 10% for GT-buck analog control channel
+						  #else
+							SetOutput(moonlightLevel,0);
+						  #endif
+						 #else
+							SetOutput(moonlightLevel);
+						 #endif
+				}
+            }
 			
 			//------------------------------------------------------------------------------
 			//	Ramping - pressed button
@@ -1298,7 +1720,8 @@ ISR(WDT_vect)
 		{
    		// Was previously pressed
 
-			if (momentaryState)
+			// dmn if (momentaryState)
+            if (momentaryState || byLockOutSet)
 			{
 				outLevel = rampingLevel = 0;		// turn off output as soon as the user lets the switch go
 				SetLevel(outLevel);
